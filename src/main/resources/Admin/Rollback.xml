@@ -1,0 +1,907 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<xwikidoc version="1.1">
+  <web>Admin</web>
+  <name>Rollback</name>
+  <language/>
+  <defaultLanguage/>
+  <translation>0</translation>
+  <creator>xwiki:XWiki.Admin</creator>
+  <creationDate>1428576588000</creationDate>
+  <parent>Main.WebHome</parent>
+  <author>xwiki:XWiki.Admin</author>
+  <contentAuthor>xwiki:XWiki.Admin</contentAuthor>
+  <date>1428870689000</date>
+  <contentUpdateDate>1428870689000</contentUpdateDate>
+  <version>1.1</version>
+  <title>Rollback</title>
+  <comment/>
+  <minorEdit>false</minorEdit>
+  <syntaxId>xwiki/2.1</syntaxId>
+  <hidden>false</hidden>
+  <content>{{groovy}}
+
+/* 
+ * Yeah, there are some improvements that can be brought to the design,
+ * mainly due to the fact that some bits may resemble spaghetti code.
+ * Mmm, spaghetti..
+ */
+
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+import org.joda.time.DateTime;
+import org.joda.time.format.DateTimeFormatter;
+import org.joda.time.format.DateTimeFormat;
+
+/* 
+ * Configuration
+ */
+
+class Configuration {
+  protected static xwiki;
+  protected static context;
+  protected static query;
+  protected static out;
+  protected static request;
+
+  protected static dateFormatter;
+
+  public static set(xwiki, context, query, out, request) {
+    this.xwiki   = xwiki;
+    this.context = context;
+    this.query   = query;
+    this.out     = out;
+    this.request = request;
+
+    // Create date formatter for general use
+    this.dateFormatter = DateTimeFormat.forPattern("yyyy/MM/dd HH:mm");
+
+    // Load the jsx on demand
+    this.xwiki.jsx.use("Admin.Rollback");
+  }
+}
+
+
+/*
+ * Business logic for the rollback action
+ */
+
+class Rollback extends Configuration {
+  private static documents     = [];
+  private static criteria      = xwiki.criteriaService.revisionCriteriaFactory.createRevisionCriteria();
+  private static rangeSize     = 0;
+  private static deleteNoMatch = false;
+
+  /**
+   * Make plan
+   *
+   * @param method
+   * @param minorVersions
+   * @param deleteNoMatch
+   */
+  public static makePlan(method, date, minorVersions, deleteNoMatch)
+  {
+    def range;
+    def period;
+
+    switch (method) {
+      case "1.1":
+        this.rangeSize = 1;
+        range = this.xwiki.criteriaService.rangeFactory.getFIRST();
+        break;
+      case "previous-version":
+        range = this.xwiki.criteriaService.rangeFactory.createTailRange(this.rangeSize = 2);
+        break;
+      case "before-date":
+        try {
+          range  = this.xwiki.criteriaService.rangeFactory.createTailRange(this.rangeSize = 1);
+          period = this.xwiki.criteriaService.periodFactory.createPeriod(
+                     this.xwiki.criteriaService.periodFactory.MIN_DATE.getMillis(), 
+                     this.dateFormatter.parseDateTime(date).getMillis()
+                   )
+        } catch (Exception ex) {}
+        break;
+    }
+
+    if (period) {
+      this.criteria.setPeriod(period);
+    }
+
+    if (range) {
+      this.criteria.setRange(range);
+    }
+
+    this.criteria.setIncludeMinorVersions(minorVersions);
+
+    this.deleteNoMatch = deleteNoMatch;
+  }
+
+  /**
+   * Process source
+   *
+   * @param type source type
+   * @param source information regarding the source
+   * @return eventual errors ecnountered during execution
+   */
+  public static processSource(type, source)
+  {
+    try {
+      switch(type) {
+        case "xar":
+          if (source.startsWith("attach:")) {
+            def document;
+            def attachment;
+
+            source = source.substring(7);
+
+            if (source.contains("@")) {
+              (document, attachment) = source.split("@");
+            } else {
+              document = this.context.getDoc().getFullName();
+              attachment = source;
+            }
+            this.documents = fromAttachmentXAR(document, attachment);
+          } else {
+            this.documents = fromFilesystemXAR(source);
+          }
+          break;
+        case "query":
+          this.documents = fromQuery(source);
+          break;
+        case "list":
+          this.documents = fromList(source);
+          break;
+      }
+    } catch (Exception ex) {
+      return ex.message;
+    }
+
+    return null;
+  }
+
+
+  /**
+   * Read XAR from attachment
+   *
+   * @param document name of the document containing the attachment
+   * @param attachment name of the xar attachment
+   * @return ZipInputStream for the specified path
+   */
+  private static fromAttachmentXAR(document, attachment) {
+    if (!this.xwiki.exists(document)) {
+      throw new Exception("The document specified as source does not exist.");
+    }
+
+    def xarDoc = this.xwiki.getDocument(document);
+    def xarAttach = xarDoc.getAttachment(attachment);
+
+    if (xarAttach == null) {
+      throw new Exception("Attachment does not exist on the document specified as source.");
+    }
+
+    def xarInputStream = xarAttach.getAttachment().getContentInputStream(this.context.context);
+
+    ZipInputStream zipInputStream = new ZipInputStream(xarInputStream);
+
+    return fromXAR(zipInputStream);    
+  }
+
+  /**
+   * Read XAR from filesystem
+   *
+   * @param path location of the xar file on the filesystem
+   * @return ZipInputStream for the specified path
+   */
+  private static fromFilesystemXAR(path) {
+    File xarFile = new File(path);
+
+    InputStream xarInputStream    = new FileInputStream(xarFile);
+    ZipInputStream zipInputStream = new ZipInputStream(xarInputStream);
+
+    return fromXAR(zipInputStream);
+  }
+
+  /**
+   * Read XAR
+   *
+   * @param path location of the xar file on the filesystem
+   * @return ZipInputStream for the specified path
+   */
+  private static fromXAR(zipInputStream) {
+    def documents = [];
+
+    ZipEntry entry;
+
+    while ((entry = zipInputStream.getNextEntry()) != null) {
+      if(entry.getName() != "package.xml") {
+        def docFullName = entry.getName().replace(".xml","").replace("/", ".");
+        documents.push(docFullName);
+      }
+    }
+
+    return documents;
+  }
+
+  /**
+   * Get documents from query
+   *
+   * @param query hql statement
+   * @return ArrayList of documents
+   */
+  private static fromQuery(query) {
+    return this.query.hql(query).execute();
+  }
+
+  /**
+   * Get documents from list
+   *
+   * @param list comma separated list of documents
+   * @return ArrayList of documents
+   */
+  private static fromList(list) {
+    return list.split(",")*.trim();
+  }
+
+  /**
+   * Perform 
+   *
+   * @param preview
+   * @return
+   */
+  private static perform(preview) {
+    List&lt;Map&lt;String, String&gt;&gt; result = new LinkedList&lt;HashMap&lt;String, String&gt;&gt;();
+
+    // Get list of selected documents from POST when performing the actual rollback
+    if (!preview) {
+      def counter    = 0;
+      def maxCounter = Integer.parseInt(this.request.counter);
+
+      this.documents = [];
+
+      while (counter &lt;= maxCounter) {
+        def filename = request.get("file_${counter++}")
+
+        if (filename != null) {
+          this.documents.add(filename);
+        }
+      }
+    }
+    
+    // Iterate through the document list
+    for (doc in this.documents) {
+      Map&lt;String, String&gt; entry = new HashMap&lt;String, String&gt;();
+
+      def exists       = this.xwiki.exists(doc);
+      def match        = false;
+      def author       = "";
+      def lastModified = "";
+      def status       = "";
+
+      def currentRevision;
+      def rollbackRevisions;
+      def rollbackRevision;
+
+      if (exists) {
+        def rollbackDoc   = xwiki.getDocument(doc);
+
+        author            = rollbackDoc.getAuthor();
+        lastModified      = rollbackDoc.getDate().format("yyyy/MM/dd HH:mm");
+        currentRevision   = rollbackDoc.getVersion();
+        rollbackRevisions = rollbackDoc.getRevisions(this.criteria);
+
+        if (rollbackRevisions.size() &gt;= this.rangeSize) {
+          rollbackRevision = rollbackRevisions.get(0);
+          match = true;
+          status = currentRevision == rollbackRevision ? "skip, same revision" : "ready to rollback";
+        } else {
+          status = this.deleteNoMatch ? "ready to delete" : "does not match criteria";
+        }
+
+        if (!preview) {
+          try {
+            if (match &amp;&amp; currentRevision != rollbackRevision) {
+              this.xwiki.getXWiki().rollback(rollbackDoc.document, rollbackRevision, this.context.context);
+              status = "rolled back";
+            } else if (this.deleteNoMatch) {
+              rollbackDoc.delete();
+              status = "deleted";
+            } else {
+              status = "skipped, " + (!match ? "no match":"same revision");
+            }
+          } catch (Exception ex) {
+            status = "failed";
+          }
+        }
+      } else {
+        status = "does not exist";
+      }
+
+      entry.put("doc", doc);
+      entry.put("exists", exists);
+      entry.put("match", match);
+      entry.put("currentRev", currentRevision);
+      entry.put("rollbackRev", rollbackRevision);
+      entry.put("author", author);
+      entry.put("lastModified", lastModified);
+      entry.put("status", status);
+
+      result.add(entry);
+    }
+
+    return result;
+  }
+}
+
+
+/*
+ * Helper class to aid in content generation
+ */
+
+class Helper extends Configuration {
+  /**
+   * Generate a html select element
+   *
+   * @param name the name assigned to the select element
+   * @param options a map containing the values and display values of the options
+   * @return 
+   */
+  public static generateSelect(id, name, options) {
+    def output = "";
+
+    output += """&lt;select id="${id}" name="${name}"&gt;""";
+    for (option in options) {
+      def selected = this.request.get(name) == option.getKey() ? " selected":"";
+      output += """&lt;option value="${option.getKey()}"${selected}&gt;${option.getValue()}&lt;/option&gt;"""
+    }
+    output += """&lt;/select&gt;""";
+
+    return output;
+  }
+
+  /**
+   * Generate a html input element
+   *
+   * @param type
+   * @param name
+   * @param value
+   */
+  public static generateInput(type, name, value) {
+    generateInput(type, name, value, [:]);
+  }
+
+  /**
+   * Generate a html input element
+   *
+   * @param type
+   * @param name
+   * @param value
+   * @param args
+   */
+  public static generateInput(type, name, value, args) {
+    def output = "";
+
+    // Initialize the DatePicker if value has been submitted
+    if (
+      args.class &amp;&amp;
+      args.class.indexOf("datetime") &gt; -1 &amp;&amp;
+      this.request.get(name) != null
+    ) {
+      try {
+        args.class += " t" + this.dateFormatter.parseDateTime(this.request.get(name)).getMillis();
+      } catch (Exception ex) {}
+    }
+
+    // Display submitted value instead of default if applicable
+    if (this.request.get(name)) {
+      value = this.request.get(name);
+    }
+
+    output += """&lt;input""";
+    output += args.id ? """ id="${args.id}" """ : "";
+    output += args.class ? """ class="${args.class}" """ : "";
+    output += """ type="${type}" name="${name}" value="${value}" """;
+    output += args.title ? """ title="${args.title}" """ : "";
+    output += args.checked || this.request.get(name) ? " checked":"";
+    output += args.disabled ? " disabled":"";
+    output += """/&gt;""";
+
+    return args.display != false ? output : "";
+  }
+
+  /**
+   * Generate a html textarea element
+   *
+   * @param name
+   * @param defaultValue
+   */
+  public static generateTextarea(name, defaultValue) {
+    def output = "";
+
+    output += """&lt;textarea name="${name}" rows="2" cols="100"&gt;""";
+    if (this.request.get(name)) {
+      output += """${this.request.get(name)}""";
+    } else {
+      output += """${defaultValue}""";
+    }
+    output += """&lt;/textarea&gt;""";
+
+    return output;
+  }
+
+  /**
+   * Generate DatePicker element
+   *
+   * @param name name of the html element
+   * @param format date format string
+   * @param value default display value
+   * @return
+   */
+  public static generateDatePicker(name, format, value) {
+    generateDatePicker(name, format, value, [:]);
+  }
+
+  /**
+   * Generate DatePicker element
+   *
+   * @param name name of the html element
+   * @param format date format string
+   * @param value default display value
+   * @param args
+   * @return
+   */
+  public static generateDatePicker(name, format, value, args) {
+    // A simple date picker widget.
+    this.xwiki.ssfx.use('uicomponents/widgets/datepicker/calendarDateSelect.css', true);
+    this.xwiki.jsfx.use('uicomponents/widgets/datepicker/calendarDateSelect.js', true);
+
+    // Used to parse and serialize the selected date using the date format specified in the XClass.
+    this.xwiki.jsfx.use('uicomponents/widgets/datepicker/simpleDateFormat.js', true);
+
+    // A wrapper over the CalendarDateSelect widget that uses the SimpleDateFormat to parse/serialize the dates.
+    this.xwiki.ssfx.use('uicomponents/widgets/datepicker/dateTimePicker.css', true);
+    this.xwiki.jsfx.use('uicomponents/widgets/datepicker/dateTimePicker.js');
+
+    if (args.class) {
+      args.class += " datetime";
+    } else {
+      args.put("class", "datetime");
+    }
+
+    args.title = format;
+
+    return generateInput("text", name, value, args);
+  }
+
+  /**
+   * Generate a html link element
+   *
+   * @param type the scope of the link
+   * @param document the document towards the link points to
+   */
+  public static generateLink(type, document) {
+    generateLink(type, document, [:]);
+  }
+
+  /**
+   * Generate a html link element
+   *
+   * @param type the scope of the link
+   * @param document the document towards the link points to
+   * @param args
+   */
+  public static generateLink(type, document, args) {
+    if(!this.xwiki.exists(document)) {
+      return type == "user" &amp;&amp; ["XWiki.superadmin", "XWiki.XWikiGuest"].contains(document) ? document.replace("XWiki.", "") : document;
+    }
+
+    def url;
+    def text;
+
+    switch(type) {
+      case "document":
+        url = this.xwiki.getURL(document);
+        text = document;
+        break;
+      case "user":
+        def doc = this.xwiki.getDocument(document);
+        def obj = doc.getObject("XWiki.XWikiUsers");
+        url = this.xwiki.getURL(document);
+        text = obj.get("first_name") + obj.get("last_name");
+        break;
+      case "diff":
+        url = this.xwiki.getURL(document, "view", "viewer=changes&amp;rev1=${args.get('fromRev')}&amp;rev2=${args.get('toRev')}");
+        text = "&amp;lt;/&amp;gt;";
+        break;
+    }
+
+    return """&lt;a href="${url}" target="_blank"&gt;${text}&lt;/a&gt;""";
+  }
+
+  /**
+   * Generate a html table element
+   *
+   * @param entries map of columns and rows
+   */
+  public static generateTable(entries) {
+    def columns = entries.get("columns");
+    def rows    = entries.get("rows");
+    def output  = "";
+   
+    output += """
+      &lt;table&gt;
+        &lt;tbody&gt;
+    """;
+
+    if (columns.size() &gt; 0) {
+      output += """&lt;tr&gt;""";
+      for (column in columns) {
+        output += """&lt;th scope="col"&gt;${column}&lt;/th&gt;""";
+      }
+      output += """&lt;/tr&gt;""";
+    }
+
+    for (row in rows) {
+      output += """&lt;tr&gt;""";
+      for (entry in row) {
+        output += """&lt;td&gt;"""
+        if (entry.getClass().toString() == "class java.util.ArrayList") {
+          for (element in entry) {
+            output += element + " ";
+          }
+        } else {
+          output += entry;
+        }
+
+        output += """&lt;/td&gt;""";
+      }
+      output += """&lt;/tr&gt;""";
+    }
+
+    output += """
+      &lt;/tbody&gt;
+        &lt;/table&gt;
+    """;
+
+    return output;
+  }
+
+  /**
+   * Generate html form element
+   *
+   * @param action the action which will be performed on submit
+   * @param method the submit method
+   * @param content the html content contained within the form
+   */
+  public static generateForm(action, method, content) {
+    def output = "";
+
+    output += """&lt;form action="${action}" method="${method}"&gt;""";
+    output += """${content}""";
+    output += """&lt;/form&gt;""";
+
+    return output;
+  }
+
+
+  /**
+   * Generate a html block
+   *
+   * @param print whether to print the content to the current display or not
+   * @param content the html content contained within the block
+   */
+  public static generateHtmlBlock(print, content) {
+    def output = """
+      {{html clean="false"}}
+        ${content}
+      {{/html}}
+    """;
+
+    if (print)
+      this.out.println(output);
+
+    return output;
+  }
+
+  /**
+   * Generate a message box
+   *
+   * @param type
+   * @param message
+   */
+  public static generateMessageBox(type, message) {
+    def output = """
+      &lt;div class="box ${type}message"&gt;
+        ${message}
+      &lt;/div&gt;
+    """;
+
+    return output;
+  }
+}
+
+
+/*
+ * Configuration
+ */
+
+Configuration.set(xwiki, xcontext, services.query, out, request);
+
+
+/*
+ * Table descriptors
+ */
+
+def settingsTable = [
+  "columns" : [],
+  "rows"    : [
+    [
+      "Source:",
+      Helper.generateTextarea("source", "attach:Space.Page@attachment.xar")
+    ],
+    [
+      "Source type:",
+      Helper.generateSelect("sourceType", "type", ["xar":"xar", "query":"hql query", "list":"comma separated list"])
+    ],
+    [
+      "Rollback method:",
+      [
+        Helper.generateSelect("rollbackMethod", "rollbackMethod", ["1.1":"first known version", "previous-version":"previous version", "before-date":"before date"]),
+        Helper.generateDatePicker("rollbackDate", "yyyy/MM/dd HH:mm", "", ["id":"rollbackDate", "class":"hidden"])
+      ]
+    ],
+    [
+      "Include minor versions:",
+      Helper.generateInput("checkbox", "minorVersions", "minorVersions", ["checked":!request.source])
+    ],
+    [
+      "Delete if there's no criteria match:",
+      Helper.generateInput("checkbox", "deleteNoMatch", "deleteNoMatch")
+    ],
+    [
+      "",
+      [
+        Helper.generateInput("submit", "listDocuments", "List documents", ["class":"btn btn-info"]),
+        Helper.generateInput("submit", "performRollback", "Perform rollback", ["class":"btn btn-success", "display":request.listDocuments != null])
+      ]
+    ]
+  ]
+];
+
+def documentsTable = [
+  "columns" : [
+    "Document",
+    "Rollback",
+    "Author",
+    "Last modified",
+    "Status"
+  ],
+  "rows" : []
+];
+
+
+/*
+ * Populate documents table
+ */
+
+def errors;
+
+if (request.source) {
+  if (request.listDocuments) {
+    documentsTable.get("columns").add(0, Helper.generateInput("checkbox", "", "", ["id":"selectAll", "checked":true]));
+  }
+
+  Rollback.makePlan(
+    request.rollbackMethod,
+    request.rollbackDate,
+    request.minorVersions != null,
+    request.deleteNoMatch != null
+  );
+
+  errors = Rollback.processSource(request.type, request.source.trim());
+
+  if (!errors) {
+    def counter = 0;
+    def results = Rollback.perform(request.listDocuments);
+
+    for (entry in results) {
+      def row    = [];
+      def exists = entry.get("exists");
+      def match  = entry.get("match");
+
+      if (request.listDocuments) {
+        row.add(Helper.generateInput(
+          "checkbox",
+          "file_${counter++}",
+          "${entry.get('doc')}",
+          [
+            "class"    : "sourceEntry",
+            "checked"  : (exists &amp;&amp; request.listDocuments), 
+            "disabled" : !exists
+          ]
+        ));
+      }
+
+      row.add(exists ? Helper.generateLink("document", entry.get("doc")) : entry.get("doc"));
+      row.add(exists ? "v" + entry.get('currentRev') + " " + ( match ?
+                       Helper.generateLink(
+                         "diff",
+                         entry.get("doc"),
+                         [
+                           "fromRev" : entry.get('currentRev'),
+                           "toRev"   : entry.get('rollbackRev')
+                         ]
+                       ) +
+                       " v" + entry.get('rollbackRev') : "") : "");
+      row.add(exists ? Helper.generateLink("user", entry.get('author')) : "");
+      row.add(entry.get('lastModified'));
+      row.add(entry.get('status'));
+
+      documentsTable.rows.add(row);
+    }
+
+    settingsTable.rows.get(settingsTable.rows.size() - 1).add([Helper.generateInput("hidden", "counter", "${counter}")]);
+  }
+}
+
+
+/*
+ * Generate and display content
+ */
+
+Helper.generateHtmlBlock(
+  true, 
+  Helper.generateForm(
+    "",
+    "POST",
+    Helper.generateTable(settingsTable) + 
+    (errors ? Helper.generateMessageBox("error", errors) : "") +
+    (request.get("source") &amp;&amp; !errors ? Helper.generateTable(documentsTable) : "")
+  )
+);
+{{/groovy}}</content>
+  <attachment>
+    <filename>xwiki-platform-ratings-ui.xar</filename>
+    <author>XWiki.Admin</author>
+    <date>1428850801000</date>
+    <version>1.1</version>
+    <comment/>
+    <content>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</content>
+    <filesize>10783</filesize>
+  </attachment>
+  <object>
+    <name>Admin.Rollback</name>
+    <number>0</number>
+    <className>XWiki.JavaScriptExtension</className>
+    <guid>de4e1414-5b83-4132-972c-2578a66bbeed</guid>
+    <class>
+      <name>XWiki.JavaScriptExtension</name>
+      <customClass/>
+      <customMapping/>
+      <defaultViewSheet/>
+      <defaultEditSheet/>
+      <defaultWeb/>
+      <nameField/>
+      <validationScript/>
+      <cache>
+        <cache>0</cache>
+        <disabled>0</disabled>
+        <displayType>select</displayType>
+        <multiSelect>0</multiSelect>
+        <name>cache</name>
+        <number>5</number>
+        <prettyName>Caching policy</prettyName>
+        <relationalStorage>0</relationalStorage>
+        <separator> </separator>
+        <separators> ,|</separators>
+        <size>1</size>
+        <unmodifiable>0</unmodifiable>
+        <values>long|short|default|forbid</values>
+        <classType>com.xpn.xwiki.objects.classes.StaticListClass</classType>
+      </cache>
+      <code>
+        <disabled>0</disabled>
+        <name>code</name>
+        <number>2</number>
+        <prettyName>Code</prettyName>
+        <rows>20</rows>
+        <size>50</size>
+        <unmodifiable>0</unmodifiable>
+        <classType>com.xpn.xwiki.objects.classes.TextAreaClass</classType>
+      </code>
+      <name>
+        <disabled>0</disabled>
+        <name>name</name>
+        <number>1</number>
+        <prettyName>Name</prettyName>
+        <size>30</size>
+        <unmodifiable>0</unmodifiable>
+        <classType>com.xpn.xwiki.objects.classes.StringClass</classType>
+      </name>
+      <parse>
+        <disabled>0</disabled>
+        <displayFormType>select</displayFormType>
+        <displayType>yesno</displayType>
+        <name>parse</name>
+        <number>4</number>
+        <prettyName>Parse content</prettyName>
+        <unmodifiable>0</unmodifiable>
+        <classType>com.xpn.xwiki.objects.classes.BooleanClass</classType>
+      </parse>
+      <use>
+        <cache>0</cache>
+        <disabled>0</disabled>
+        <displayType>select</displayType>
+        <multiSelect>0</multiSelect>
+        <name>use</name>
+        <number>3</number>
+        <prettyName>Use this extension</prettyName>
+        <relationalStorage>0</relationalStorage>
+        <separator> </separator>
+        <separators> ,|</separators>
+        <size>1</size>
+        <unmodifiable>0</unmodifiable>
+        <values>currentPage|onDemand|always</values>
+        <classType>com.xpn.xwiki.objects.classes.StaticListClass</classType>
+      </use>
+    </class>
+    <property>
+      <cache>long</cache>
+    </property>
+    <property>
+      <code>(function() {
+  function init() {
+    var selectAll = document.getElementById("selectAll");
+    var rollbackMethod = document.getElementById("rollbackMethod");
+
+    if (selectAll) {
+      selectAll.addEventListener("click", function() {
+        checkAll(this.checked);
+      });
+    }
+
+    rollbackMethod.addEventListener("change", function() {
+      toggleInputs(this.value);
+    });
+
+    toggleInputs(rollbackMethod.value);
+
+    return true;
+  }
+
+  function checkAll(checked) {
+    var entries = document.getElementsByClassName("sourceEntry");
+
+    for (var i = 0; i &lt; entries.length; i++) {
+      if (!entries[i].disabled) {
+        entries[i].checked = checked;
+      }
+    }
+  }
+
+  function toggleInputs(method) {
+    var rollbackDate   = document.getElementById("rollbackDate");
+
+    switch(method) {
+      case "before-date":
+        rollbackDate.classList.remove("hidden");
+        break;
+      default:
+        rollbackDate.classList.add("hidden");
+    }
+  }
+
+(XWiki.domIsLoaded &amp;&amp; init()) || document.observe('xwiki:dom:loaded', init);
+})();</code>
+    </property>
+    <property>
+      <name/>
+    </property>
+    <property>
+      <parse/>
+    </property>
+    <property>
+      <use>currentPage</use>
+    </property>
+  </object>
+</xwikidoc>
