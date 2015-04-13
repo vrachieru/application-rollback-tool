@@ -77,6 +77,7 @@ class Rollback extends Configuration {
    * Make plan
    *
    * @param method rollback method
+   * @param date point in time from when to rollback
    * @param minorVersions include minor versions
    * @param deleteNoMatch delete document when it doesn't match criteria
    */
@@ -138,7 +139,7 @@ class Rollback extends Configuration {
             if (source.contains("@")) {
               (document, attachment) = source.split("@");
             } else {
-              document = this.context.getDoc().getFullName();
+              document   = this.context.getDoc().getFullName();
               attachment = source;
             }
             this.documents = fromAttachmentXAR(document, attachment);
@@ -173,7 +174,7 @@ class Rollback extends Configuration {
       throw new Exception("The document specified as source does not exist.");
     }
 
-    def xarDoc = this.xwiki.getDocument(document);
+    def xarDoc    = this.xwiki.getDocument(document);
     def xarAttach = xarDoc.getAttachment(attachment);
 
     if (xarAttach == null) {
@@ -292,7 +293,7 @@ class Rollback extends Configuration {
 
         if (rollbackRevisions.size() &gt;= this.rangeSize) {
           rollbackRevision = rollbackRevisions.get(0);
-          match = true;
+          match  = true;
           status = currentRevision == rollbackRevision ? "skip, same revision" : "ready to rollback";
         } else {
           status = this.deleteNoMatch ? "ready to delete" : "does not match criteria";
@@ -353,7 +354,7 @@ class Helper extends Configuration {
     output += """&lt;select id="${id}" name="${name}"&gt;""";
     for (option in options) {
       def selected = this.request.get(name) == option.getKey() ? " selected":"";
-      output += """&lt;option value="${option.getKey()}"${selected}&gt;${option.getValue()}&lt;/option&gt;"""
+      output += """&lt;option value="${option.getKey()}"${selected}&gt;${option.getValue()}&lt;/option&gt;""";
     }
     output += """&lt;/select&gt;""";
 
@@ -498,7 +499,8 @@ class Helper extends Configuration {
    */
   public static generateLink(type, document, args) {
     if(!this.xwiki.exists(document)) {
-      return type == "user" &amp;&amp; ["XWiki.superadmin", "XWiki.XWikiGuest"].contains(document) ? document.replace("XWiki.", "") : document;
+      def users = ["XWiki.superadmin", "XWiki.XWikiGuest"];
+      return type == "user" &amp;&amp; users.contains(document) ? document.replace("XWiki.", "") : document;
     }
 
     def url;
@@ -506,17 +508,21 @@ class Helper extends Configuration {
 
     switch(type) {
       case "document":
-        url = this.xwiki.getURL(document);
+        url  = this.xwiki.getURL(document);
         text = document;
         break;
       case "user":
         def doc = this.xwiki.getDocument(document);
         def obj = doc.getObject("XWiki.XWikiUsers");
-        url = this.xwiki.getURL(document);
+        url  = this.xwiki.getURL(document);
         text = obj.get("first_name") + obj.get("last_name");
         break;
       case "diff":
-        url = this.xwiki.getURL(document, "view", "viewer=changes&amp;rev1=${args.get('fromRev')}&amp;rev2=${args.get('toRev')}");
+        url  = this.xwiki.getURL(
+                 document,
+                 "view",
+                 "viewer=changes&amp;rev1=${args.get('fromRev')}&amp;rev2=${args.get('toRev')}"
+               );
         text = "&amp;lt;/&amp;gt;";
         break;
     }
@@ -647,32 +653,85 @@ def settingsTable = [
   "rows"    : [
     [
       "Source:",
-      Helper.generateTextarea("source", "attach:Space.Page@attachment.xar")
+      Helper.generateTextarea(
+        "source",
+        "attach:Space.Page@attachment.xar"
+      )
     ],
     [
       "Source type:",
-      Helper.generateSelect("sourceType", "type", ["xar":"xar", "query":"hql query", "list":"comma separated list"])
+      Helper.generateSelect(
+        "sourceType",
+        "type",
+        [
+          "xar"   : "xar",
+          "query" : "hql query",
+          "list"  : "comma separated list"
+        ]
+      )
     ],
     [
       "Rollback method:",
       [
-        Helper.generateSelect("rollbackMethod", "rollbackMethod", ["1.1":"first known version", "previous-version":"previous version", "before-date":"before date"]),
-        Helper.generateDatePicker("rollbackDate", "yyyy/MM/dd HH:mm", "", ["id":"rollbackDate", "class":"hidden"])
+        Helper.generateSelect(
+          "rollbackMethod",
+          "rollbackMethod",
+          [
+            "1.1"              : "first known version",
+            "previous-version" : "previous version",
+            "before-date"      : "before date"
+          ]
+        ),
+        Helper.generateDatePicker(
+          "rollbackDate",
+          "yyyy/MM/dd HH:mm",
+          "",
+          [
+            "id"    : "rollbackDate",
+            "class" : "hidden"
+          ]
+        )
       ]
     ],
     [
       "Include minor versions:",
-      Helper.generateInput("checkbox", "minorVersions", "minorVersions", ["checked":!request.source])
+      Helper.generateInput(
+        "checkbox",
+        "minorVersions",
+        "minorVersions",
+        [
+          "checked" : !request.source
+        ]
+      )
     ],
     [
       "Delete if there's no criteria match:",
-      Helper.generateInput("checkbox", "deleteNoMatch", "deleteNoMatch")
+      Helper.generateInput(
+        "checkbox",
+        "deleteNoMatch",
+        "deleteNoMatch"
+      )
     ],
     [
       "",
       [
-        Helper.generateInput("submit", "listDocuments", "List documents", ["class":"btn btn-info"]),
-        Helper.generateInput("submit", "performRollback", "Perform rollback", ["class":"btn btn-success", "display":request.listDocuments != null])
+        Helper.generateInput(
+          "submit",
+          "listDocuments",
+          "List documents",
+          [
+            "class" : "btn btn-info"
+          ]
+        ),
+        Helper.generateInput(
+          "submit",
+          "performRollback",
+          "Perform rollback",
+          [
+            "class"   : "btn btn-success",
+            "display" : request.listDocuments != null
+          ]
+        )
       ]
     ]
   ]
@@ -698,7 +757,18 @@ def errors;
 
 if (request.source) {
   if (request.listDocuments) {
-    documentsTable.get("columns").add(0, Helper.generateInput("checkbox", "", "", ["id":"selectAll", "checked":true]));
+    documentsTable.get("columns").add(
+      0,
+      Helper.generateInput(
+        "checkbox",
+        "",
+        "",
+        [
+          "id"      : "selectAll",
+          "checked" : true
+        ]
+      )
+    );
   }
 
   Rollback.makePlan(
@@ -732,7 +802,14 @@ if (request.source) {
         ));
       }
 
-      row.add(exists ? Helper.generateLink("document", entry.get("doc")) : entry.get("doc"));
+      row.add(exists ? Helper.generateLink(
+                         "document",
+                         entry.get("doc")
+                       )
+                       :
+                       entry.get("doc")
+      );
+
       row.add(exists ? "v" + entry.get('currentRev') + " " + ( match ?
                        Helper.generateLink(
                          "diff",
@@ -742,15 +819,34 @@ if (request.source) {
                            "toRev"   : entry.get('rollbackRev')
                          ]
                        ) +
-                       " v" + entry.get('rollbackRev') : "") : "");
-      row.add(exists ? Helper.generateLink("user", entry.get('author')) : "");
+                       " v" + entry.get('rollbackRev') : "")
+                       :
+                       ""
+      );
+
+      row.add(exists ? Helper.generateLink(
+                         "user",
+                         entry.get('author')
+                       )
+                       :
+                       ""
+      );
+
       row.add(entry.get('lastModified'));
       row.add(entry.get('status'));
 
       documentsTable.rows.add(row);
     }
 
-    settingsTable.rows.get(settingsTable.rows.size() - 1).add([Helper.generateInput("hidden", "counter", "${counter}")]);
+    settingsTable.rows.get(settingsTable.rows.size() - 1).add(
+      [
+        Helper.generateInput(
+          "hidden",
+          "counter",
+          "${counter}"
+        )
+      ]
+    );
   }
 }
 
