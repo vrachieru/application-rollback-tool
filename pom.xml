@@ -31,7 +31,7 @@
   </parent>
   <groupId>org.xwiki.contrib</groupId>
   <artifactId>xwiki-rollback-tool</artifactId>
-  <version>1.0</version>
+  <version>1.1-SNAPSHOT</version>
   <name>Rollback tool</name>
   <packaging>xar</packaging>
   <description>Revert XWiki documents to a previous state.</description>
@@ -39,7 +39,7 @@
     <connection>scm:git:git://github.com/vrachieru/application-rollback-tool.git</connection>
     <developerConnection>scm:git:git@github.com:vrachieru/application-rollback-tool.git</developerConnection>
     <url>https://github.com/vrachieru/application-rollback-tool.git</url>
-    <tag>xwiki-rollback-tool-1.0</tag>
+    <tag>HEAD</tag>
   </scm>
   <developers>
     <developer>
