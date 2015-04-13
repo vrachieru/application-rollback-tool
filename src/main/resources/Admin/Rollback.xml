@@ -285,6 +285,7 @@ class Rollback extends Configuration {
 
       if (exists) {
         def rollbackDoc   = xwiki.getDocument(doc);
+        def revisionDoc;
 
         author            = rollbackDoc.getAuthor();
         lastModified      = rollbackDoc.getDate().format("yyyy/MM/dd HH:mm");
@@ -303,7 +304,12 @@ class Rollback extends Configuration {
           try {
             if (match &amp;&amp; currentRevision != rollbackRevision) {
               this.xwiki.getXWiki().rollback(rollbackDoc.document, rollbackRevision, this.context.context);
-              status = "rolled back";
+              rollbackDoc      = xwiki.getDocument(doc);
+              author           = rollbackDoc.getAuthor();
+              lastModified     = rollbackDoc.getDate().format("yyyy/MM/dd HH:mm");
+              rollbackRevision = currentRevision;
+              currentRevision  = rollbackDoc.getVersion();
+              status           = "rolled back";
             } else if (this.deleteNoMatch) {
               rollbackDoc.delete();
               status = "deleted";
