@@ -21,7 +21,7 @@
   <hidden>false</hidden>
   <content>{{groovy}}
 
-/* 
+/*
  * Yeah, there are some improvements that can be brought to the design,
  * mainly due to the fact that some bits may resemble spaghetti code.
  * Mmm, spaghetti..
@@ -34,7 +34,7 @@ import org.joda.time.DateTime;
 import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.DateTimeFormat;
 
-/* 
+/*
  * Configuration
  */
 
@@ -76,9 +76,9 @@ class Rollback extends Configuration {
   /**
    * Make plan
    *
-   * @param method
-   * @param minorVersions
-   * @param deleteNoMatch
+   * @param method rollback method
+   * @param minorVersions include minor versions
+   * @param deleteNoMatch delete document when it doesn't match criteria
    */
   public static makePlan(method, date, minorVersions, deleteNoMatch)
   {
@@ -97,7 +97,7 @@ class Rollback extends Configuration {
         try {
           range  = this.xwiki.criteriaService.rangeFactory.createTailRange(this.rangeSize = 1);
           period = this.xwiki.criteriaService.periodFactory.createPeriod(
-                     this.xwiki.criteriaService.periodFactory.MIN_DATE.getMillis(), 
+                     this.xwiki.criteriaService.periodFactory.MIN_DATE.getMillis(),
                      this.dateFormatter.parseDateTime(date).getMillis()
                    )
         } catch (Exception ex) {}
@@ -122,7 +122,7 @@ class Rollback extends Configuration {
    *
    * @param type source type
    * @param source information regarding the source
-   * @return eventual errors ecnountered during execution
+   * @return errors ecnountered during execution
    */
   public static processSource(type, source)
   {
@@ -166,7 +166,7 @@ class Rollback extends Configuration {
    *
    * @param document name of the document containing the attachment
    * @param attachment name of the xar attachment
-   * @return ZipInputStream for the specified path
+   * @return ZipInputStream for the specified file
    */
   private static fromAttachmentXAR(document, attachment) {
     if (!this.xwiki.exists(document)) {
@@ -184,7 +184,7 @@ class Rollback extends Configuration {
 
     ZipInputStream zipInputStream = new ZipInputStream(xarInputStream);
 
-    return fromXAR(zipInputStream);    
+    return fromXAR(zipInputStream);
   }
 
   /**
@@ -206,7 +206,7 @@ class Rollback extends Configuration {
    * Read XAR
    *
    * @param path location of the xar file on the filesystem
-   * @return ZipInputStream for the specified path
+   * @return ZipInputStream for the specified file
    */
   private static fromXAR(zipInputStream) {
     def documents = [];
@@ -244,10 +244,10 @@ class Rollback extends Configuration {
   }
 
   /**
-   * Perform 
+   * Perform rollback
    *
-   * @param preview
-   * @return
+   * @param preview just list the source documents or actually rollback
+   * @return map of documents with aditional info regarding their state
    */
   private static perform(preview) {
     List&lt;Map&lt;String, String&gt;&gt; result = new LinkedList&lt;HashMap&lt;String, String&gt;&gt;();
@@ -267,7 +267,7 @@ class Rollback extends Configuration {
         }
       }
     }
-    
+
     // Iterate through the document list
     for (doc in this.documents) {
       Map&lt;String, String&gt; entry = new HashMap&lt;String, String&gt;();
@@ -342,9 +342,10 @@ class Helper extends Configuration {
   /**
    * Generate a html select element
    *
+   * @param id the id assigned to the select element
    * @param name the name assigned to the select element
    * @param options a map containing the values and display values of the options
-   * @return 
+   * @return html content
    */
   public static generateSelect(id, name, options) {
     def output = "";
@@ -362,9 +363,10 @@ class Helper extends Configuration {
   /**
    * Generate a html input element
    *
-   * @param type
-   * @param name
-   * @param value
+   * @param type element type
+   * @param name element name
+   * @param value element value
+   * @return html content
    */
   public static generateInput(type, name, value) {
     generateInput(type, name, value, [:]);
@@ -373,10 +375,11 @@ class Helper extends Configuration {
   /**
    * Generate a html input element
    *
-   * @param type
-   * @param name
-   * @param value
-   * @param args
+   * @param type element type
+   * @param name element name
+   * @param value element value
+   * @param args map of aditional parameters
+   * @return html content
    */
   public static generateInput(type, name, value, args) {
     def output = "";
@@ -412,8 +415,9 @@ class Helper extends Configuration {
   /**
    * Generate a html textarea element
    *
-   * @param name
-   * @param defaultValue
+   * @param name element name
+   * @param defaultValue default value
+   * @return html content
    */
   public static generateTextarea(name, defaultValue) {
     def output = "";
@@ -435,7 +439,7 @@ class Helper extends Configuration {
    * @param name name of the html element
    * @param format date format string
    * @param value default display value
-   * @return
+   * @return html content
    */
   public static generateDatePicker(name, format, value) {
     generateDatePicker(name, format, value, [:]);
@@ -447,8 +451,8 @@ class Helper extends Configuration {
    * @param name name of the html element
    * @param format date format string
    * @param value default display value
-   * @param args
-   * @return
+   * @param args map of aditional parameters
+   * @return html content
    */
   public static generateDatePicker(name, format, value, args) {
     // A simple date picker widget.
@@ -478,6 +482,7 @@ class Helper extends Configuration {
    *
    * @param type the scope of the link
    * @param document the document towards the link points to
+   * @return html content
    */
   public static generateLink(type, document) {
     generateLink(type, document, [:]);
@@ -488,7 +493,8 @@ class Helper extends Configuration {
    *
    * @param type the scope of the link
    * @param document the document towards the link points to
-   * @param args
+   * @param args map of aditional parameters
+   * @return html content
    */
   public static generateLink(type, document, args) {
     if(!this.xwiki.exists(document)) {
@@ -522,12 +528,13 @@ class Helper extends Configuration {
    * Generate a html table element
    *
    * @param entries map of columns and rows
+   * @return html content
    */
   public static generateTable(entries) {
     def columns = entries.get("columns");
     def rows    = entries.get("rows");
     def output  = "";
-   
+
     output += """
       &lt;table&gt;
         &lt;tbody&gt;
@@ -572,6 +579,7 @@ class Helper extends Configuration {
    * @param action the action which will be performed on submit
    * @param method the submit method
    * @param content the html content contained within the form
+   * @return html content
    */
   public static generateForm(action, method, content) {
     def output = "";
@@ -589,6 +597,7 @@ class Helper extends Configuration {
    *
    * @param print whether to print the content to the current display or not
    * @param content the html content contained within the block
+   * @return html content
    */
   public static generateHtmlBlock(print, content) {
     def output = """
@@ -606,8 +615,9 @@ class Helper extends Configuration {
   /**
    * Generate a message box
    *
-   * @param type
-   * @param message
+   * @param type the type of the messagebox (info/warning/error)
+   * @param message the message to display
+   * @return html content
    */
   public static generateMessageBox(type, message) {
     def output = """
@@ -716,7 +726,7 @@ if (request.source) {
           "${entry.get('doc')}",
           [
             "class"    : "sourceEntry",
-            "checked"  : (exists &amp;&amp; request.listDocuments), 
+            "checked"  : (exists &amp;&amp; request.listDocuments),
             "disabled" : !exists
           ]
         ));
@@ -750,11 +760,11 @@ if (request.source) {
  */
 
 Helper.generateHtmlBlock(
-  true, 
+  true,
   Helper.generateForm(
     "",
     "POST",
-    Helper.generateTable(settingsTable) + 
+    Helper.generateTable(settingsTable) +
     (errors ? Helper.generateMessageBox("error", errors) : "") +
     (request.get("source") &amp;&amp; !errors ? Helper.generateTable(documentsTable) : "")
   )
